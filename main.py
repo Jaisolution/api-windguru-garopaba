@@ -4,80 +4,259 @@ import re
 
 app = FastAPI(
     title="API Windguru Garopaba",
-    version="3.0.0"
+    description="API de previsão para ESP32",
+    version="4.0.0"
 )
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
 
 
+def baixar_windguru():
+
+    resposta = requests.get(
+        WINDGURU_URL,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        },
+        timeout=30
+    )
+
+    resposta.raise_for_status()
+
+    return resposta.text
+
+
+def limpar_html(html):
+
+    html = re.sub(
+        r"<script.*?</script>",
+        " ",
+        html,
+        flags=re.S | re.I
+    )
+
+    html = re.sub(
+        r"<style.*?</style>",
+        " ",
+        html,
+        flags=re.S | re.I
+    )
+
+    html = re.sub(
+        r"<[^>]+>",
+        " ",
+        html
+    )
+
+    html = html.replace("&nbsp;", " ")
+
+    html = re.sub(
+        r"\s+",
+        " ",
+        html
+    )
+
+    return html
+
+
+def extrair_numeros(texto, inicio, fim=None):
+
+    pos = texto.find(inicio)
+
+    if pos == -1:
+        return []
+
+    if fim:
+        fim_pos = texto.find(fim, pos)
+
+        if fim_pos != -1:
+            trecho = texto[pos:fim_pos]
+        else:
+            trecho = texto[pos:pos + 5000]
+
+    else:
+        trecho = texto[pos:pos + 5000]
+
+    numeros = re.findall(
+        r"(?<![\w.])-?\d+(?:\.\d+)?",
+        trecho
+    )
+
+    return numeros
+
+
 @app.get("/")
 def inicio():
+
     return {
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "3.0"
+        "versao": "4.0"
     }
+
+
+@app.get("/teste")
+def teste():
+
+    try:
+
+        html = baixar_windguru()
+
+        texto = limpar_html(html)
+
+        return {
+            "status": "ok",
+            "tamanho_html": len(html),
+            "tamanho_texto": len(texto),
+            "tem_ondas": "波浪" in texto,
+            "tem_swell": "湧浪" in texto,
+            "tem_vento": "風速" in texto,
+            "tem_rajada": "陣風" in texto,
+            "tem_temperatura": "氣溫" in texto,
+            "tem_chuva": "降雨" in texto,
+            "tem_nuvens": "雲層覆蓋" in texto
+        }
+
+    except Exception as erro:
+
+        return {
+            "status": "erro",
+            "erro": str(erro)
+        }
 
 
 @app.get("/garopaba")
 def garopaba():
 
     try:
-        resposta = requests.get(
-            WINDGURU_URL,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-            timeout=30
+
+        html = baixar_windguru()
+
+        texto = limpar_html(html)
+
+        # ----------------------------------
+        # ONDAS
+        # ----------------------------------
+
+        ondas = extrair_numeros(
+            texto,
+            "波浪 (m)",
+            "*波浪週期"
         )
 
-        html = resposta.text
+        # ----------------------------------
+        # PERÍODO DAS ONDAS
+        # ----------------------------------
 
-        # Mantém o texto da página
-        texto = re.sub(r"<script.*?</script>", " ", html, flags=re.S)
-        texto = re.sub(r"<style.*?</style>", " ", texto, flags=re.S)
-        texto = re.sub(r"<[^>]+>", " ", texto)
-        texto = re.sub(r"\s+", " ", texto)
+        periodo = extrair_numeros(
+            texto,
+            "*波浪週期(秒)",
+            "波浪向"
+        )
 
-        # Procura algumas linhas importantes
-        ondas = encontrar_linha(texto, "波浪")
-        swell = encontrar_linha(texto, "湧浪")
-        vento = encontrar_linha(texto, "風速")
-        rajada = encontrar_linha(texto, "陣風")
+        # ----------------------------------
+        # SWELL
+        # ----------------------------------
+
+        swell = extrair_numeros(
+            texto,
+            "湧浪 (m)",
+            "湧浪週期"
+        )
+
+        # ----------------------------------
+        # PERÍODO DO SWELL
+        # ----------------------------------
+
+        periodo_swell = extrair_numeros(
+            texto,
+            "湧浪週期（秒）",
+            "Swell energy"
+        )
+
+        # ----------------------------------
+        # VENTO
+        # ----------------------------------
+
+        vento = extrair_numeros(
+            texto,
+            "風速 (節)",
+            "陣風"
+        )
+
+        # ----------------------------------
+        # RAJADA
+        # ----------------------------------
+
+        rajada = extrair_numeros(
+            texto,
+            "陣風 (節)",
+            "風向"
+        )
+
+        # ----------------------------------
+        # TEMPERATURA
+        # ----------------------------------
+
+        temperatura = extrair_numeros(
+            texto,
+            "*氣溫 (°C)",
+            "雲層覆蓋"
+        )
+
+        # ----------------------------------
+        # CHUVA
+        # ----------------------------------
+
+        chuva = extrair_numeros(
+            texto,
+            "*降雨 (mm/1時)",
+            "Windguru 分數"
+        )
 
         return {
-            "local": "Garopaba",
-            "windguru_spot": 209196,
-            "status": "dados_extraidos",
-            "tamanho_pagina": len(html),
 
-            "teste": {
-                "ondas": ondas,
-                "swell": swell,
-                "vento": vento,
-                "rajada": rajada
+            "local": "Garopaba",
+
+            "windguru_spot": 209196,
+
+            "status": "dados_extraidos",
+
+            "modelo": "GFS-Wave 25 km",
+
+            "dados": {
+
+                "ondas_m": ondas,
+
+                "periodo_onda_s": periodo,
+
+                "swell_m": swell,
+
+                "periodo_swell_s": periodo_swell,
+
+                "vento_nos": vento,
+
+                "rajada_nos": rajada,
+
+                "temperatura_c": temperatura,
+
+                "chuva_mm": chuva
+
             }
+
         }
 
     except Exception as erro:
 
         return {
+
             "local": "Garopaba",
+
             "windguru_spot": 209196,
+
             "status": "erro",
+
             "erro": str(erro)
+
         }
-
-
-def encontrar_linha(texto, termo):
-
-    posicao = texto.find(termo)
-
-    if posicao == -1:
-        return "nao encontrado"
-
-    # Pega um trecho depois do nome da linha
-    trecho = texto[posicao:posicao + 1000]
-
-    return trecho
