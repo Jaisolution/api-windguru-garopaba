@@ -1,24 +1,26 @@
 from fastapi import FastAPI
 
 app = FastAPI(
-title="API Windguru Garopaba",
-description="API de previsão para ESP32",
-version="1.0.0"
+    title="API Windguru Garopaba",
+    description="API de previsão para ESP32",
+    version="1.0.0"
 )
+
 
 @app.get("/")
 def inicio():
-return {
-"status": "online",
-"api": "Windguru Garopaba",
-"spot": 209196
-}
+    return {
+        "status": "online",
+        "api": "Windguru Garopaba",
+        "spot": 209196
+    }
+
 
 @app.get("/garopaba")
 def garopaba():
-return {
-"local": "Garopaba",
-"windguru_spot": 209196,
-"previsao": [],
-"mensagem": "API funcionando"
-}
+    return {
+        "local": "Garopaba",
+        "windguru_spot": 209196,
+        "previsao": [],
+        "mensagem": "API funcionando"
+    }
