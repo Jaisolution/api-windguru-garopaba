@@ -1,4 +1,4 @@
-```python
+python
 from fastapi import FastAPI
 
 app = FastAPI(
@@ -25,4 +25,3 @@ def garopaba():
         "previsao": [],
         "mensagem": "API funcionando. A extração dos dados será adicionada."
     }
-```
