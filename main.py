@@ -4,8 +4,7 @@ import re
 
 app = FastAPI(
     title="API Windguru Garopaba",
-    description="API de previsão para ESP32",
-    version="2.0.0"
+    version="3.0.0"
 )
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
@@ -17,7 +16,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "2.0"
+        "versao": "3.0"
     }
 
 
@@ -30,21 +29,35 @@ def garopaba():
             headers={
                 "User-Agent": "Mozilla/5.0"
             },
-            timeout=20
+            timeout=30
         )
 
-        texto = resposta.text
+        html = resposta.text
 
-        # Converte o HTML em texto simples
+        # Mantém o texto da página
+        texto = re.sub(r"<script.*?</script>", " ", html, flags=re.S)
+        texto = re.sub(r"<style.*?</style>", " ", texto, flags=re.S)
         texto = re.sub(r"<[^>]+>", " ", texto)
         texto = re.sub(r"\s+", " ", texto)
+
+        # Procura algumas linhas importantes
+        ondas = encontrar_linha(texto, "波浪")
+        swell = encontrar_linha(texto, "湧浪")
+        vento = encontrar_linha(texto, "風速")
+        rajada = encontrar_linha(texto, "陣風")
 
         return {
             "local": "Garopaba",
             "windguru_spot": 209196,
-            "status": "dados_recebidos",
-            "tamanho_pagina": len(texto),
-            "mensagem": "Windguru acessado com sucesso"
+            "status": "dados_extraidos",
+            "tamanho_pagina": len(html),
+
+            "teste": {
+                "ondas": ondas,
+                "swell": swell,
+                "vento": vento,
+                "rajada": rajada
+            }
         }
 
     except Exception as erro:
@@ -55,3 +68,16 @@ def garopaba():
             "status": "erro",
             "erro": str(erro)
         }
+
+
+def encontrar_linha(texto, termo):
+
+    posicao = texto.find(termo)
+
+    if posicao == -1:
+        return "nao encontrado"
+
+    # Pega um trecho depois do nome da linha
+    trecho = texto[posicao:posicao + 1000]
+
+    return trecho
