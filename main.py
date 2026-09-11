@@ -5,8 +5,7 @@ import re
 
 app = FastAPI(
     title="API Windguru Garopaba",
-    description="API de previsão para ESP32",
-    version="6.0.0"
+    version="7.0"
 )
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
@@ -49,19 +48,63 @@ def extrair_modelos(html):
                 html[inicio:]
             )
 
+            fcst = dados.get("fcst", {})
+
+            # Procura os dados de previsão
+            previsao = None
+
+            if str(dados.get("id_model")) in fcst:
+                previsao = fcst[str(dados.get("id_model"))]
+
+            elif fcst:
+                primeira_chave = list(fcst.keys())[0]
+                previsao = fcst[primeira_chave]
+
+            if previsao is None:
+                previsao = {}
+
+            # Variáveis que queremos analisar
+            variaveis_teste = [
+                "hours",
+                "hr_h",
+                "hr_d",
+                "HTSGW",
+                "PERPW",
+                "DIRPW",
+                "SWELL1",
+                "SWPER1",
+                "SWDIR1",
+                "WINDSPD",
+                "GUST",
+                "WINDDIR",
+                "TMP",
+                "APCP",
+                "TCDC"
+            ]
+
+            dados_teste = {}
+
+            for variavel in variaveis_teste:
+
+                if variavel in previsao:
+
+                    valor = previsao[variavel]
+
+                    # Mostra somente os primeiros 12 valores
+                    if isinstance(valor, list):
+                        dados_teste[variavel] = valor[:12]
+
+                    else:
+                        dados_teste[variavel] = valor
+
             modelos.append({
                 "id": numero,
-                "spot": dados.get("spot"),
                 "modelo": dados.get("model"),
                 "id_model": dados.get("id_model"),
+                "spot": dados.get("spot"),
                 "latitude": dados.get("lat"),
                 "longitude": dados.get("lon"),
-                "variaveis": list(
-                    dados.get("fcst", {}).get(
-                        str(dados.get("id_model")),
-                        {}
-                    ).keys()
-                )
+                "dados_teste": dados_teste
             })
 
         except Exception as erro:
@@ -81,7 +124,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "6.0"
+        "versao": "7.0"
     }
 
 
