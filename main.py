@@ -2,16 +2,16 @@ from fastapi import FastAPI
 import requests
 import json
 import re
-from datetime import datetime, timedelta, timezone
 
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="8.0"
+    version="9.0"
 )
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
 
+HORARIOS = ["06", "12", "18"]
 MAX_DIAS = 4
 
 
@@ -36,9 +36,7 @@ def extrair_modelos(html):
 
     padrao = r'var\s+wg_fcst_tab_data_(\d+)\s*=\s*'
 
-    encontrados = re.finditer(padrao, html)
-
-    for encontrado in encontrados:
+    for encontrado in re.finditer(padrao, html):
 
         try:
 
@@ -55,26 +53,58 @@ def extrair_modelos(html):
             id_model = str(dados.get("id_model"))
 
             if id_model in fcst:
+
                 previsao = fcst[id_model]
 
             elif fcst:
+
                 primeira_chave = list(fcst.keys())[0]
                 previsao = fcst[primeira_chave]
 
             else:
                 continue
 
-            nome_modelo = dados.get("model")
-
-            modelos[nome_modelo] = {
-                "dados": dados,
-                "previsao": previsao
-            }
+            modelos[dados.get("model")] = previsao
 
         except Exception:
             continue
 
     return modelos
+
+
+def valor(lista, indice):
+
+    if not isinstance(lista, list):
+        return None
+
+    if indice >= len(lista):
+        return None
+
+    return lista[indice]
+
+
+def numero(valor_recebido):
+
+    if valor_recebido is None:
+        return None
+
+    try:
+        return round(float(valor_recebido), 1)
+
+    except Exception:
+        return None
+
+
+def no_para_kmh(valor_recebido):
+
+    if valor_recebido is None:
+        return None
+
+    try:
+        return round(float(valor_recebido) * 1.852, 1)
+
+    except Exception:
+        return None
 
 
 def direcao_compass(graus):
@@ -101,106 +131,92 @@ def direcao_compass(graus):
         "NNW"
     ]
 
-    indice = int((float(graus) + 11.25) / 22.5) % 16
+    indice = int(
+        (float(graus) + 11.25) / 22.5
+    ) % 16
 
     return direcoes[indice]
 
 
-def no_para_kmh(valor):
+def montar_dias(modelos):
 
-    if valor is None:
-        return None
+    ondas = modelos.get("gfsw")
+    tempo = modelos.get("gfs")
 
-    return round(float(valor) * 1.852, 1)
-
-
-def numero(valor):
-
-    if valor is None:
-        return None
-
-    try:
-        return round(float(valor), 2)
-
-    except:
-        return None
-
-
-def obter_valor(lista, indice):
-
-    if not isinstance(lista, list):
-        return None
-
-    if indice >= len(lista):
-        return None
-
-    return lista[indice]
-
-
-def montar_previsao(modelos):
-
-    onda = modelos.get("gfsw", {}).get("previsao", {})
-    tempo = modelos.get("gfs", {}).get("previsao", {})
-
-    if not onda:
+    if not ondas:
         return []
 
     if not tempo:
         return []
 
-    horas_onda = onda.get("hours", [])
+    horas_ondas = ondas.get("hours", [])
     horas_tempo = tempo.get("hours", [])
 
-    resultados = []
+    dias = {}
 
-    for i, hora_onda in enumerate(horas_onda):
+    for i, hora in enumerate(horas_ondas):
 
-        # Procurar o mesmo horário no modelo GFS
+        hora_wg = valor(
+            ondas.get("hr_h"),
+            i
+        )
+
+        dia_wg = valor(
+            ondas.get("hr_d"),
+            i
+        )
+
+        if hora_wg is None or dia_wg is None:
+            continue
+
+        hora_formatada = str(hora_wg).zfill(2)
+
+        # Só queremos 06, 12 e 18
+        if hora_formatada not in HORARIOS:
+            continue
+
+        # Procurar o mesmo horário no GFS
         indice_tempo = None
 
         for j, hora_tempo in enumerate(horas_tempo):
 
-            if hora_tempo == hora_onda:
+            if hora_tempo == hora:
                 indice_tempo = j
                 break
 
         if indice_tempo is None:
             continue
 
-        dia = obter_valor(
-            onda.get("hr_d"),
-            i
-        )
+        chave_dia = str(dia_wg)
 
-        hora = obter_valor(
-            onda.get("hr_h"),
-            i
-        )
+        if chave_dia not in dias:
 
-        if dia is None or hora is None:
-            continue
+            dias[chave_dia] = {
+                "data": chave_dia,
+                "horarios": {}
+            }
 
         # =========================
-        # ONDAS
+        # ONDA
         # =========================
 
-        altura_onda = numero(
-            obter_valor(
-                onda.get("HTSGW"),
+        onda = numero(
+            valor(
+                ondas.get("HTSGW"),
                 i
             )
         )
 
-        periodo_onda = numero(
-            obter_valor(
-                onda.get("PERPW"),
+        periodo = numero(
+            valor(
+                ondas.get("PERPW"),
                 i
             )
         )
 
         direcao_onda = numero(
-            obter_valor(
-                onda.get("DIRPW"),
+            valor(
+                ondas.get("DIRPW"),
                 i
             )
         )
@@ -209,23 +225,23 @@ def montar_previsao(modelos):
         # SWELL
         # =========================
 
-        altura_swell = numero(
-            obter_valor(
-                onda.get("SWELL1"),
+        swell = numero(
+            valor(
+                ondas.get("SWELL1"),
                 i
             )
         )
 
         periodo_swell = numero(
-            obter_valor(
-                onda.get("SWPER1"),
+            valor(
+                ondas.get("SWPER1"),
                 i
             )
         )
 
         direcao_swell = numero(
-            obter_valor(
-                onda.get("SWDIR1"),
+            valor(
+                ondas.get("SWDIR1"),
                 i
             )
         )
@@ -235,21 +251,21 @@ def montar_previsao(modelos):
         # =========================
 
         vento = no_para_kmh(
-            obter_valor(
+            valor(
                 tempo.get("WINDSPD"),
                 indice_tempo
             )
         )
 
         rajada = no_para_kmh(
-            obter_valor(
+            valor(
                 tempo.get("GUST"),
                 indice_tempo
             )
         )
 
         direcao_vento = numero(
-            obter_valor(
+            valor(
                 tempo.get("WINDDIR"),
                 indice_tempo
             )
@@ -260,7 +276,7 @@ def montar_previsao(modelos):
         # =========================
 
         temperatura = numero(
-            obter_valor(
+            valor(
                 tempo.get("TMP"),
                 indice_tempo
             )
@@ -271,18 +287,21 @@ def montar_previsao(modelos):
         # =========================
 
         nuvens = numero(
-            obter_valor(
+            valor(
                 tempo.get("TCDC"),
                 indice_tempo
             )
         )
+
+        if nuvens is None:
+            nuvens = 0
 
         # =========================
         # CHUVA
         # =========================
 
         chuva = numero(
-            obter_valor(
+            valor(
                 tempo.get("APCP"),
                 indice_tempo
             )
@@ -292,42 +311,81 @@ def montar_previsao(modelos):
             chuva = 0
 
         # =========================
-        # RESULTADO
+        # DADOS DO HORÁRIO
         # =========================
 
-        item = {
-            "dia": str(dia),
-            "hora": str(hora) + ":00",
+        dados_horario = {
 
-            "onda": altura_onda,
-            "periodo": periodo_onda,
-            "direcao_onda": direcao_onda,
-            "direcao_onda_nome": direcao_compass(
+            "onda": onda,
+
+            "periodo": periodo,
+
+            "direcao": direcao_compass(
                 direcao_onda
             ),
 
-            "swell": altura_swell,
+            "swell": swell,
+
             "periodo_swell": periodo_swell,
-            "direcao_swell": direcao_swell,
-            "direcao_swell_nome": direcao_compass(
+
+            "direcao_swell": direcao_compass(
                 direcao_swell
             ),
 
             "vento": vento,
+
             "rajada": rajada,
-            "direcao_vento": direcao_vento,
-            "direcao_vento_nome": direcao_compass(
+
+            "vento_dir": direcao_compass(
                 direcao_vento
             ),
 
-            "temperatura": temperatura,
+            "temp": temperatura,
+
             "nuvens": nuvens,
+
             "chuva": chuva
         }
 
-        resultados.append(item)
+        # Nome do período
+        if hora_formatada == "06":
+            nome = "manha"
 
-    return resultados
+        elif hora_formatada == "12":
+            nome = "tarde"
+
+        else:
+            nome = "noite"
+
+        dias[chave_dia]["horarios"][nome] = dados_horario
+
+    # =========================
+    # CONVERTER PARA LISTA
+    # =========================
+
+    resultado = []
+
+    for dia, dados in dias.items():
+
+        item = {
+            "data": dados["data"]
+        }
+
+        horarios = dados["horarios"]
+
+        if "manha" in horarios:
+            item["manha"] = horarios["manha"]
+
+        if "tarde" in horarios:
+            item["tarde"] = horarios["tarde"]
+
+        if "noite" in horarios:
+            item["noite"] = horarios["noite"]
+
+        resultado.append(item)
+
+    # Somente 4 dias
+    return resultado[:MAX_DIAS]
 
 
 @app.get("/")
@@ -337,7 +395,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "8.0"
+        "versao": "9.0"
     }
 
 
@@ -350,9 +408,7 @@ def garopaba():
 
         modelos = extrair_modelos(html)
 
-        previsao = montar_previsao(
-            modelos
-        )
+        dias = montar_dias(modelos)
 
         return {
             "status": "ok",
@@ -360,7 +416,7 @@ def garopaba():
             "windguru_spot": 209196,
             "unidade_onda": "metros",
             "unidade_vento": "km/h",
-            "previsao": previsao
+            "dias": dias
         }
 
     except Exception as erro:
