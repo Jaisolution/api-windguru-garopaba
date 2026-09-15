@@ -1,391 +1,286 @@
 from fastapi import FastAPI
 import requests
-import json
 import re
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-app = FastAPI(
-    title="API Windguru Garopaba",
-    description="API de previsão para ESP32",
-    version="9.0"
-)
+app = FastAPI()
 
-WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
+SPOT = 209196
+WINDGURU_URL = f"https://old.windguru.cz/int/iapi.php?sc={SPOT}"
 
-HORARIOS = ["06", "12", "18"]
-MAX_DIAS = 4
-
-
-def baixar_windguru():
-
-    resposta = requests.get(
-        WINDGURU_URL,
-        headers={
-            "User-Agent": "Mozilla/5.0"
-        },
-        timeout=30
-    )
-
-    resposta.raise_for_status()
-
-    return resposta.text
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
 
-def extrair_modelos(html):
-
-    modelos = {}
-
-    padrao = r'var\s+wg_fcst_tab_data_(\d+)\s*=\s*'
-
-    for encontrado in re.finditer(padrao, html):
-
-        try:
-
-            inicio = encontrado.end()
-
-            decoder = json.JSONDecoder()
-
-            dados, tamanho = decoder.raw_decode(
-                html[inicio:]
-            )
-
-            fcst = dados.get("fcst", {})
-
-            id_model = str(dados.get("id_model"))
-
-            if id_model in fcst:
-
-                previsao = fcst[id_model]
-
-            elif fcst:
-
-                primeira_chave = list(fcst.keys())[0]
-                previsao = fcst[primeira_chave]
-
-            else:
-                continue
-
-            modelos[dados.get("model")] = previsao
-
-        except Exception:
-            continue
-
-    return modelos
-
-
-def valor(lista, indice):
-
-    if not isinstance(lista, list):
-        return None
-
-    if indice >= len(lista):
-        return None
-
-    return lista[indice]
-
-
-def numero(valor_recebido):
-
-    if valor_recebido is None:
-        return None
-
-    try:
-        return round(float(valor_recebido), 1)
-
-    except Exception:
-        return None
-
-
-def no_para_kmh(valor_recebido):
-
-    if valor_recebido is None:
-        return None
-
-    try:
-        return round(float(valor_recebido) * 1.852, 1)
-
-    except Exception:
-        return None
-
-
-def direcao_compass(graus):
-
+def direcao_graus(graus):
     if graus is None:
-        return None
+        return ""
+
+    try:
+        g = float(graus) % 360
+    except:
+        return ""
 
     direcoes = [
-        "N",
-        "NNE",
-        "NE",
-        "ENE",
-        "E",
-        "ESE",
-        "SE",
-        "SSE",
-        "S",
-        "SSW",
-        "SW",
-        "WSW",
-        "W",
-        "WNW",
-        "NW",
-        "NNW"
+        "N", "NNE", "NE", "ENE",
+        "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW",
+        "W", "WNW", "NW", "NNW"
     ]
 
-    indice = int(
-        (float(graus) + 11.25) / 22.5
-    ) % 16
-
+    indice = int((g + 11.25) / 22.5) % 16
     return direcoes[indice]
 
 
-def montar_dias(modelos):
+def kmh(valor):
+    if valor is None:
+        return None
 
-    ondas = modelos.get("gfsw")
-    tempo = modelos.get("gfs")
+    try:
+        return round(float(valor) * 1.852, 1)
+    except:
+        return None
 
-    if not ondas:
-        return []
 
-    if not tempo:
-        return []
+def numero(valor):
+    if valor is None:
+        return None
 
-    horas_ondas = ondas.get("hours", [])
-    horas_tempo = tempo.get("hours", [])
+    try:
+        return float(valor)
+    except:
+        return None
+
+
+def extrair_variavel(texto, nome):
+    """
+    Procura uma variável JavaScript do Windguru.
+    """
+
+    padroes = [
+        rf'{nome}\s*=\s*(\[[\s\S]*?\]);',
+        rf'var\s+{nome}\s*=\s*(\[[\s\S]*?\]);',
+        rf'window\.{nome}\s*=\s*(\[[\s\S]*?\]);'
+    ]
+
+    for padrao in padroes:
+        m = re.search(padrao, texto)
+
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except:
+                pass
+
+    return None
+
+
+def buscar_windguru():
+
+    url = f"https://old.windguru.cz/ee/index.php?sc={SPOT}"
+
+    r = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=30
+    )
+
+    r.raise_for_status()
+
+    texto = r.text
+
+    # --------------------------------------------
+    # HORÁRIOS
+    # --------------------------------------------
+
+    horas = extrair_variavel(texto, "wg_fcst_tab_data_1")
+
+    # --------------------------------------------
+    # TENTA GFS
+    # --------------------------------------------
+
+    gfs = extrair_variavel(texto, "wg_fcst_tab_data_2")
+
+    # --------------------------------------------
+    # TENTA GFS-WAVE
+    # --------------------------------------------
+
+    gfs_wave = extrair_variavel(
+        texto,
+        "wg_fcst_tab_data_3"
+    )
+
+    if gfs is None:
+        raise Exception("Não encontrei dados GFS")
+
+    if gfs_wave is None:
+        gfs_wave = gfs
+
+    return texto, gfs, gfs_wave
+
+
+def localizar_dados(texto):
+
+    """
+    Esta função procura os arrays internos do Windguru.
+    """
+
+    nomes = [
+        "hours",
+        "WINDSPD",
+        "GUST",
+        "WINDDIR",
+        "HTSGW",
+        "PERPW",
+        "DIRPW",
+        "SWELL1",
+        "SWPER1",
+        "SWDIR1"
+    ]
+
+    resultado = {}
+
+    for nome in nomes:
+
+        padroes = [
+            rf'"{nome}"\s*:\s*(\[[^\]]*\])',
+            rf"'{nome}'\s*:\s*(\[[^\]]*\])",
+            rf'{nome}\s*:\s*(\[[^\]]*\])'
+        ]
+
+        encontrado = None
+
+        for padrao in padroes:
+
+            m = re.search(
+                padrao,
+                texto
+            )
+
+            if m:
+
+                try:
+                    encontrado = json.loads(
+                        m.group(1)
+                    )
+                    break
+
+                except:
+                    pass
+
+        resultado[nome] = encontrado
+
+    return resultado
+
+
+def gerar_previsao():
+
+    texto, gfs, gfs_wave = buscar_windguru()
+
+    dados = localizar_dados(texto)
+
+    horas = dados.get("hours")
+
+    if not horas:
+        raise Exception(
+            "Não foi possível localizar o array de horários do Windguru"
+        )
+
+    # --------------------------------------------
+    # arrays
+    # --------------------------------------------
+
+    windspd = dados.get("WINDSPD")
+    gust = dados.get("GUST")
+    winddir = dados.get("WINDDIR")
+
+    htsgw = dados.get("HTSGW")
+    perpw = dados.get("PERPW")
+    dirpw = dados.get("DIRPW")
+
+    swell1 = dados.get("SWELL1")
+    swper1 = dados.get("SWPER1")
+    swdir1 = dados.get("SWDIR1")
+
+    # --------------------------------------------
+    # resultado
+    # --------------------------------------------
 
     dias = {}
 
-    for i, hora in enumerate(horas_ondas):
+    for i, h in enumerate(horas):
 
-        hora_wg = valor(
-            ondas.get("hr_h"),
-            i
-        )
+        try:
 
-        dia_wg = valor(
-            ondas.get("hr_d"),
-            i
-        )
+            # Alguns formatos do Windguru usam timestamp
+            if isinstance(h, (int, float)):
 
-        if hora_wg is None or dia_wg is None:
+                dt = datetime.fromtimestamp(
+                    h,
+                    ZoneInfo("America/Sao_Paulo")
+                )
+
+            else:
+
+                continue
+
+        except:
+
             continue
 
-        hora_formatada = str(hora_wg).zfill(2)
-
-        # Só queremos 06, 12 e 18
-        if hora_formatada not in HORARIOS:
+        if dt.hour not in [6, 12, 15]:
             continue
 
-        # Procurar o mesmo horário no GFS
-        indice_tempo = None
+        dia = str(dt.day)
 
-        for j, hora_tempo in enumerate(horas_tempo):
-
-            if hora_tempo == hora:
-                indice_tempo = j
-                break
-
-        if indice_tempo is None:
-            continue
-
-        chave_dia = str(dia_wg)
-
-        if chave_dia not in dias:
-
-            dias[chave_dia] = {
-                "data": chave_dia,
-                "horarios": {}
+        if dia not in dias:
+            dias[dia] = {
+                "data": dia
             }
 
-        # =========================
-        # ONDA
-        # =========================
+        chave = f"{dt.hour:02d}"
 
-        onda = numero(
-            valor(
-                ondas.get("HTSGW"),
-                i
-            )
-        )
+        def pega(arr):
+            if arr is None:
+                return None
 
-        periodo = numero(
-            valor(
-                ondas.get("PERPW"),
-                i
-            )
-        )
+            if i >= len(arr):
+                return None
 
-        direcao_onda = numero(
-            valor(
-                ondas.get("DIRPW"),
-                i
-            )
-        )
+            return numero(arr[i])
 
-        # =========================
-        # SWELL
-        # =========================
+        vento = pega(windspd)
+        rajada = pega(gust)
+        onda = pega(htsgw)
+        periodo = pega(perpw)
 
-        swell = numero(
-            valor(
-                ondas.get("SWELL1"),
-                i
-            )
-        )
+        swell = pega(swell1)
+        periodo_swell = pega(swper1)
 
-        periodo_swell = numero(
-            valor(
-                ondas.get("SWPER1"),
-                i
-            )
-        )
+        wd = pega(winddir)
+        wv = pega(dirpw)
+        sd = pega(swdir1)
 
-        direcao_swell = numero(
-            valor(
-                ondas.get("SWDIR1"),
-                i
-            )
-        )
-
-        # =========================
-        # VENTO
-        # =========================
-
-        vento = no_para_kmh(
-            valor(
-                tempo.get("WINDSPD"),
-                indice_tempo
-            )
-        )
-
-        rajada = no_para_kmh(
-            valor(
-                tempo.get("GUST"),
-                indice_tempo
-            )
-        )
-
-        direcao_vento = numero(
-            valor(
-                tempo.get("WINDDIR"),
-                indice_tempo
-            )
-        )
-
-        # =========================
-        # TEMPERATURA
-        # =========================
-
-        temperatura = numero(
-            valor(
-                tempo.get("TMP"),
-                indice_tempo
-            )
-        )
-
-        # =========================
-        # NUVENS
-        # =========================
-
-        nuvens = numero(
-            valor(
-                tempo.get("TCDC"),
-                indice_tempo
-            )
-        )
-
-        if nuvens is None:
-            nuvens = 0
-
-        # =========================
-        # CHUVA
-        # =========================
-
-        chuva = numero(
-            valor(
-                tempo.get("APCP"),
-                indice_tempo
-            )
-        )
-
-        if chuva is None:
-            chuva = 0
-
-        # =========================
-        # DADOS DO HORÁRIO
-        # =========================
-
-        dados_horario = {
-
+        dias[dia][chave] = {
             "onda": onda,
-
             "periodo": periodo,
-
-            "direcao": direcao_compass(
-                direcao_onda
-            ),
+            "direcao": direcao_graus(wv),
 
             "swell": swell,
-
             "periodo_swell": periodo_swell,
+            "direcao_swell": direcao_graus(sd),
 
-            "direcao_swell": direcao_compass(
-                direcao_swell
-            ),
-
-            "vento": vento,
-
-            "rajada": rajada,
-
-            "vento_dir": direcao_compass(
-                direcao_vento
-            ),
-
-            "temp": temperatura,
-
-            "nuvens": nuvens,
-
-            "chuva": chuva
+            "vento": kmh(vento),
+            "rajada": kmh(rajada),
+            "vento_dir": direcao_graus(wd)
         }
 
-        # Nome do período
-        if hora_formatada == "06":
-            nome = "manha"
+    lista = list(dias.values())
 
-        elif hora_formatada == "12":
-            nome = "tarde"
-
-        else:
-            nome = "noite"
-
-        dias[chave_dia]["horarios"][nome] = dados_horario
-
-    # =========================
-    # CONVERTER PARA LISTA
-    # =========================
-
-    resultado = []
-
-    for dia, dados in dias.items():
-
-        item = {
-            "data": dados["data"]
-        }
-
-        horarios = dados["horarios"]
-
-        if "manha" in horarios:
-            item["manha"] = horarios["manha"]
-
-        if "tarde" in horarios:
-            item["tarde"] = horarios["tarde"]
-
-        if "noite" in horarios:
-            item["noite"] = horarios["noite"]
-
-        resultado.append(item)
-
-    # Somente 4 dias
-    return resultado[:MAX_DIAS]
+    return lista[:4]
 
 
 @app.get("/")
@@ -394,8 +289,7 @@ def inicio():
     return {
         "status": "online",
         "api": "Windguru Garopaba",
-        "spot": 209196,
-        "versao": "9.0"
+        "spot": SPOT
     }
 
 
@@ -404,24 +298,25 @@ def garopaba():
 
     try:
 
-        html = baixar_windguru()
-
-        modelos = extrair_modelos(html)
-
-        dias = montar_dias(modelos)
+        dias = gerar_previsao()
 
         return {
             "status": "ok",
             "local": "Garopaba",
-            "windguru_spot": 209196,
+            "windguru_spot": SPOT,
             "unidade_onda": "metros",
             "unidade_vento": "km/h",
+            "horarios": [
+                "06",
+                "12",
+                "15"
+            ],
             "dias": dias
         }
 
-    except Exception as erro:
+    except Exception as e:
 
         return {
             "status": "erro",
-            "erro": str(erro)
+            "mensagem": str(e)
         }
