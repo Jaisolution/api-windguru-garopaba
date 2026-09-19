@@ -2,12 +2,15 @@ from fastapi import FastAPI
 import requests
 import json
 import re
+from html import unescape
+
 
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="10.0"
+    version="11.0"
 )
+
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
 
@@ -36,6 +39,224 @@ def baixar_windguru():
     resposta.raise_for_status()
 
     return resposta.text
+
+
+# ============================================================
+# LIMPAR TEXTO HTML
+# ============================================================
+
+def limpar_texto_html(texto):
+
+    if texto is None:
+        return ""
+
+    texto = re.sub(
+        r"<[^>]+>",
+        " ",
+        texto
+    )
+
+    texto = unescape(texto)
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto
+    )
+
+    return texto.strip()
+
+
+# ============================================================
+# EXTRAIR SOL, LUA E TEMPERATURA DA AGUA
+# ============================================================
+
+def extrair_dados_astronomicos(html):
+
+    dados = {
+        "nascer_sol": None,
+        "por_sol": None,
+        "nascer_lua": None,
+        "por_lua": None,
+        "temperatura_agua": None
+    }
+
+    try:
+
+        texto = limpar_texto_html(html)
+
+        # ----------------------------------------------------
+        # LOG PARA CONFERENCIA
+        # ----------------------------------------------------
+
+        print("")
+        print("==========================================")
+        print("PROCURANDO SOL / LUA / AGUA")
+        print("==========================================")
+
+        # ----------------------------------------------------
+        # 1) TENTA LOCALIZAR HORARIOS NO HTML
+        #
+        # No topo do Windguru aparecem normalmente:
+        #
+        # 06:09 - 18:06
+        # 11:38 - 01:26
+        #
+        # Procuramos pares HH:MM - HH:MM.
+        # ----------------------------------------------------
+
+        pares_horarios = re.findall(
+            r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})',
+            texto
+        )
+
+        # Remove duplicados mantendo a ordem
+        pares_unicos = []
+
+        for par in pares_horarios:
+
+            if par not in pares_unicos:
+
+                pares_unicos.append(par)
+
+        print(
+            "Pares de horarios encontrados:",
+            pares_unicos[:10]
+        )
+
+        # ----------------------------------------------------
+        # Normalmente os dois primeiros pares do cabecalho sao:
+        #
+        # primeiro = nascer / por do sol
+        # segundo  = nascer / por da lua
+        # ----------------------------------------------------
+
+        if len(pares_unicos) >= 1:
+
+            dados["nascer_sol"] = pares_unicos[0][0]
+            dados["por_sol"] = pares_unicos[0][1]
+
+        if len(pares_unicos) >= 2:
+
+            dados["nascer_lua"] = pares_unicos[1][0]
+            dados["por_lua"] = pares_unicos[1][1]
+
+        # ----------------------------------------------------
+        # 2) TEMPERATURA DA AGUA
+        #
+        # Tenta primeiro procurar proximo de:
+        # water / sea / agua / mar
+        # ----------------------------------------------------
+
+        padroes_agua = [
+
+            r'(?:water|sea|agua|água|mar)[^0-9]{0,80}'
+            r'(-?\d+(?:[.,]\d+)?)\s*°?\s*C',
+
+            r'(-?\d+(?:[.,]\d+)?)\s*°\s*C'
+        ]
+
+        for padrao in padroes_agua:
+
+            encontrados = re.findall(
+                padrao,
+                texto,
+                flags=re.IGNORECASE
+            )
+
+            if encontrados:
+
+                for encontrado in encontrados:
+
+                    try:
+
+                        temperatura = float(
+                            str(encontrado).replace(",", ".")
+                        )
+
+                        # Temperatura plausivel da agua do mar
+                        if 5 <= temperatura <= 35:
+
+                            dados["temperatura_agua"] = round(
+                                temperatura,
+                                1
+                            )
+
+                            break
+
+                    except Exception:
+
+                        continue
+
+            if dados["temperatura_agua"] is not None:
+
+                break
+
+        # ----------------------------------------------------
+        # TENTATIVA DIRETA NO HTML
+        # caso simbolo ° esteja codificado
+        # ----------------------------------------------------
+
+        if dados["temperatura_agua"] is None:
+
+            html_decodificado = unescape(html)
+
+            temperaturas = re.findall(
+                r'(-?\d+(?:[.,]\d+)?)\s*(?:°|&deg;)?\s*C',
+                html_decodificado,
+                flags=re.IGNORECASE
+            )
+
+            for temp in temperaturas:
+
+                try:
+
+                    temperatura = float(
+                        temp.replace(",", ".")
+                    )
+
+                    if 5 <= temperatura <= 35:
+
+                        dados["temperatura_agua"] = round(
+                            temperatura,
+                            1
+                        )
+
+                        break
+
+                except Exception:
+
+                    continue
+
+        print("Nascer do sol:", dados["nascer_sol"])
+        print("Por do sol:", dados["por_sol"])
+
+        print(
+            "Nascer da lua:",
+            dados["nascer_lua"]
+        )
+
+        print(
+            "Por da lua:",
+            dados["por_lua"]
+        )
+
+        print(
+            "Temperatura da agua:",
+            dados["temperatura_agua"]
+        )
+
+        print("==========================================")
+        print("")
+
+    except Exception as erro:
+
+        print(
+            "Erro ao extrair sol/lua/agua:",
+            erro
+        )
+
+    return dados
 
 
 # ============================================================
@@ -247,10 +468,6 @@ def obter_chuva(tempo, indice_tempo):
             "intervalo": "3h"
         }
 
-    # --------------------------------------------------------
-    # NAO ENCONTROU PRECIPITACAO
-    # --------------------------------------------------------
-
     return {
         "valor": 0.0,
         "fonte": "nenhum",
@@ -281,7 +498,6 @@ def montar_dias(modelos):
 
     # ========================================================
     # MOSTRAR CAMPOS DO GFS NO LOG
-    # Isso vai ajudar a verificar APCP / APCP1
     # ========================================================
 
     print("")
@@ -526,7 +742,6 @@ def montar_dias(modelos):
 
             nuvens = 0.0
 
-        # Garante 0 a 100
         if nuvens < 0:
 
             nuvens = 0.0
@@ -555,10 +770,6 @@ def montar_dias(modelos):
         chuva_intervalo = dados_chuva[
             "intervalo"
         ]
-
-        # ====================================================
-        # LOG PARA TESTAR CHUVA
-        # ====================================================
 
         print(
             "Dia:",
@@ -683,10 +894,6 @@ def montar_dias(modelos):
             item
         )
 
-    # ========================================================
-    # SOMENTE 4 DIAS
-    # ========================================================
-
     return resultado[
         :MAX_DIAS
     ]
@@ -703,7 +910,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "10.0"
+        "versao": "11.0"
     }
 
 
@@ -721,6 +928,15 @@ def garopaba():
         # ====================================================
 
         html = baixar_windguru()
+
+        # ====================================================
+        # NOVO:
+        # EXTRAIR SOL / LUA / TEMPERATURA DA AGUA
+        # ====================================================
+
+        dados_extra = extrair_dados_astronomicos(
+            html
+        )
 
         # ====================================================
         # EXTRAIR MODELOS
@@ -767,6 +983,37 @@ def garopaba():
             "unidade_vento": "km/h",
 
             "unidade_chuva": "mm",
+
+            # ================================================
+            # NOVOS DADOS
+            # ================================================
+
+            "sol": {
+                "nascer": dados_extra[
+                    "nascer_sol"
+                ],
+                "por": dados_extra[
+                    "por_sol"
+                ]
+            },
+
+            "lua": {
+                "nascer": dados_extra[
+                    "nascer_lua"
+                ],
+                "por": dados_extra[
+                    "por_lua"
+                ]
+            },
+
+            "temperatura_agua":
+                dados_extra[
+                    "temperatura_agua"
+                ],
+
+            # ================================================
+            # PREVISAO ORIGINAL
+            # ================================================
 
             "dias": dias
         }
