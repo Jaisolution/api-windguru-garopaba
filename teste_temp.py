@@ -1,66 +1,88 @@
 from fastapi import FastAPI
 import requests
 import re
-from html import unescape
 
 app = FastAPI()
 
 URL = "https://old.windguru.cz/zht/index.php?sc=209196"
 
 
+def baixar():
+    resposta = requests.get(
+        URL,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "Chrome/120.0 Safari/537.36"
+            )
+        },
+        timeout=30
+    )
+
+    resposta.raise_for_status()
+    return resposta.text
+
+
 @app.get("/")
+def inicio():
+
+    try:
+        html = baixar()
+
+        return {
+            "status": "online",
+            "teste": "temperatura agua",
+            "tamanho_html": len(html)
+        }
+
+    except Exception as erro:
+        return {
+            "status": "erro",
+            "erro": str(erro)
+        }
+
+
+@app.get("/teste")
 def teste():
 
     try:
-        resposta = requests.get(
-            URL,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 "
-                    "Chrome/120.0 Safari/537.36"
-                )
-            },
-            timeout=30
-        )
-
-        resposta.raise_for_status()
-
-        html = resposta.text
-        texto = unescape(html)
-
-        # Retira tags
-        texto_limpo = re.sub(r"<[^>]+>", " ", texto)
-        texto_limpo = re.sub(r"\s+", " ", texto_limpo)
+        html = baixar()
 
         resultados = []
 
-        # Procura TODAS as temperaturas escritas como °C
-        padrao = re.compile(
-            r'(-?\d{1,2}(?:[.,]\d+)?)\s*°\s*C',
-            re.IGNORECASE
-        )
+        # Procura ocorrencias do numero 16 no HTML BRUTO.
+        # Nao remove tags nem JavaScript.
+        for encontrado in re.finditer(
+            r'(?<!\d)16(?:[.,]0)?(?!\d)',
+            html
+        ):
 
-        for encontrado in padrao.finditer(texto_limpo):
-
-            temperatura = encontrado.group(1)
-
-            inicio = max(0, encontrado.start() - 150)
-            fim = min(
-                len(texto_limpo),
-                encontrado.end() + 150
+            inicio = max(
+                0,
+                encontrado.start() - 300
             )
 
-            contexto = texto_limpo[inicio:fim]
+            fim = min(
+                len(html),
+                encontrado.end() + 300
+            )
+
+            contexto = html[inicio:fim]
 
             resultados.append({
-                "temperatura": temperatura,
+                "posicao": encontrado.start(),
                 "contexto": contexto
             })
 
+            # Evita uma resposta gigantesca
+            if len(resultados) >= 30:
+                break
+
         return {
             "status": "ok",
-            "quantidade": len(resultados),
+            "tamanho_html": len(html),
+            "quantidade_mostrada": len(resultados),
             "resultados": resultados
         }
 
