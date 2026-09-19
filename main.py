@@ -1,83 +1,58 @@
 # ============================================================
-# DEBUG CABECALHO WINDGURU
+# EXTRAIR TEMPERATURA DA AGUA DO WINDGURU
 # ============================================================
 
-@app.get("/debug-cabecalho")
-def debug_cabecalho():
+def extrair_temperatura_agua(html):
 
     try:
 
-        html = baixar_windguru()
+        # Remove as tags HTML
+        texto = re.sub(r"<[^>]+>", " ", html)
 
-        resultados = []
+        # Converte entidades HTML
+        texto = unescape(texto)
 
-        # Procura trechos que tenham horarios HH:MM
-        for encontrado in re.finditer(
-            r'\d{1,2}:\d{2}',
-            html
-        ):
+        # Remove espaços repetidos
+        texto = re.sub(r"\s+", " ", texto)
 
-            inicio = max(
-                0,
-                encontrado.start() - 250
+        # Procura o bloco do spot de Garopaba.
+        # A temperatura da água aparece depois das
+        # informações de latitude/longitude e horários.
+
+        padrao = re.compile(
+            r'Lat:\s*-28(?:[.,]\d+)?'
+            r'.{0,800}?'
+            r'\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}'
+            r'.{0,200}?'
+            r'(\d{1,2}(?:[.,]\d+)?)\s*°\s*C',
+            re.IGNORECASE | re.DOTALL
+        )
+
+        resultado = padrao.search(texto)
+
+        if resultado:
+
+            temperatura = float(
+                resultado.group(1).replace(",", ".")
             )
 
-            fim = min(
-                len(html),
-                encontrado.end() + 250
+            print(
+                "Temperatura da agua:",
+                temperatura,
+                "C"
             )
 
-            trecho = html[inicio:fim]
+            return temperatura
 
-            resultados.append(
-                trecho
-            )
+        print("Temperatura da agua nao encontrada")
 
-            if len(resultados) >= 30:
-                break
-
-        # Procura trechos relacionados a temperatura
-        temperatura = []
-
-        palavras = [
-            "water",
-            "Water",
-            "WATER",
-            "sea",
-            "Sea",
-            "temp_water",
-            "water_temp"
-        ]
-
-        for palavra in palavras:
-
-            pos = html.find(palavra)
-
-            if pos >= 0:
-
-                inicio = max(
-                    0,
-                    pos - 300
-                )
-
-                fim = min(
-                    len(html),
-                    pos + 500
-                )
-
-                temperatura.append(
-                    html[inicio:fim]
-                )
-
-        return {
-            "status": "ok",
-            "horarios": resultados,
-            "temperatura": temperatura
-        }
+        return None
 
     except Exception as erro:
 
-        return {
-            "status": "erro",
-            "erro": str(erro)
-        }
+        print(
+            "Erro temperatura da agua:",
+            erro
+        )
+
+        return None
