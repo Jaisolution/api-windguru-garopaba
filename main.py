@@ -3,6 +3,10 @@ import requests
 import json
 import re
 
+# =====================================================
+# FASTAPI
+# =====================================================
+
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
@@ -10,7 +14,7 @@ app = FastAPI(
 )
 
 # =====================================================
-# CONFIGURAÇÕES
+# CONFIGURACAO
 # =====================================================
 
 WINDGURU_URL = "https://old.windguru.cz/zht/index.php?sc=209196"
@@ -41,7 +45,8 @@ def baixar_windguru():
 
 
 # =====================================================
-# TEMPERATURA DA ÁGUA - SURF FORECAST
+# BUSCAR TEMPERATURA DA AGUA
+# SURF-FORECAST
 # =====================================================
 
 def buscar_temperatura_agua():
@@ -51,12 +56,7 @@ def buscar_temperatura_agua():
         resposta = requests.get(
             SURF_FORECAST_URL,
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36"
-                ),
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
                 "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
             },
             timeout=20
@@ -66,91 +66,125 @@ def buscar_temperatura_agua():
 
         html = resposta.text
 
-        # -------------------------------------------------
+        # Remove tags HTML para facilitar a busca
+        texto = re.sub(r"<[^>]+>", " ", html)
+
+        texto = (
+            texto
+            .replace("&nbsp;", " ")
+            .replace("&deg;", "°")
+            .replace("&#176;", "°")
+        )
+
+        texto = re.sub(
+            r"\s+",
+            " ",
+            texto
+        )
+
+        # =============================================
         # TENTATIVA 1
-        # -------------------------------------------------
+        # =============================================
 
         padrao1 = (
-            r'temperatura da [áa]gua do mar de '
-            r'Praia de Garopaba hoje [ée]'
-            r'.{0,300}?'
-            r'([0-9]{1,2}(?:[.,][0-9])?)'
-            r'\s*(?:°|&deg;)?\s*C'
+            r"temperatura da [áa]gua do mar de "
+            r"Praia de Garopaba hoje [ée]"
+            r".{0,150}?"
+            r"([0-9]{1,2}(?:[.,][0-9])?)"
+            r"\s*°?\s*C"
         )
 
         resultado = re.search(
             padrao1,
-            html,
-            re.IGNORECASE | re.DOTALL
+            texto,
+            re.IGNORECASE
         )
 
         if resultado:
 
-            temperatura = resultado.group(1)
+            temperatura = (
+                resultado
+                .group(1)
+                .replace(",", ".")
+            )
 
-            temperatura = temperatura.replace(",", ".")
+            return round(
+                float(temperatura),
+                1
+            )
 
-            return round(float(temperatura), 1)
-
-        # -------------------------------------------------
+        # =============================================
         # TENTATIVA 2
-        # -------------------------------------------------
+        # =============================================
 
         padrao2 = (
-            r'temperatura do mar hoje em Praia de Garopaba'
-            r'.{0,300}?'
-            r'([0-9]{1,2}(?:[.,][0-9])?)'
-            r'\s*(?:°|&deg;)?\s*C'
+            r"Praia de Garopaba"
+            r".{0,300}?"
+            r"([0-9]{1,2}(?:[.,][0-9])?)"
+            r"\s*°\s*C"
         )
 
         resultado = re.search(
             padrao2,
-            html,
-            re.IGNORECASE | re.DOTALL
+            texto,
+            re.IGNORECASE
         )
 
         if resultado:
 
-            temperatura = resultado.group(1)
+            temperatura = (
+                resultado
+                .group(1)
+                .replace(",", ".")
+            )
 
-            temperatura = temperatura.replace(",", ".")
+            temperatura = float(
+                temperatura
+            )
 
-            return round(float(temperatura), 1)
+            # Protecao contra capturar numero absurdo
+            if 5 <= temperatura <= 35:
 
-        # -------------------------------------------------
+                return round(
+                    temperatura,
+                    1
+                )
+
+        # =============================================
         # TENTATIVA 3
-        # -------------------------------------------------
+        # =============================================
 
-        padrao3 = (
-            r'(?:sea temperature|water temperature|'
-            r'temperatura da [áa]gua)'
-            r'.{0,200}?'
-            r'([0-9]{1,2}(?:[.,][0-9])?)'
-            r'\s*(?:°|&deg;)?\s*C'
+        temperaturas = re.findall(
+            r"([0-9]{1,2}(?:[.,][0-9])?)\s*°\s*C",
+            texto,
+            re.IGNORECASE
         )
 
-        resultado = re.search(
-            padrao3,
-            html,
-            re.IGNORECASE | re.DOTALL
-        )
+        for temp in temperaturas:
 
-        if resultado:
+            try:
 
-            temperatura = resultado.group(1)
+                temp_num = float(
+                    temp.replace(",", ".")
+                )
 
-            temperatura = temperatura.replace(",", ".")
+                # Faixa plausivel para agua do mar
+                if 10 <= temp_num <= 30:
 
-            return round(float(temperatura), 1)
+                    return round(
+                        temp_num,
+                        1
+                    )
 
-        print("Temperatura da agua nao encontrada no Surf-Forecast")
+            except Exception:
+                pass
 
         return None
 
     except Exception as erro:
 
         print(
-            "Erro ao buscar temperatura da agua:",
+            "Erro temperatura agua:",
             erro
         )
 
@@ -158,7 +192,7 @@ def buscar_temperatura_agua():
 
 
 # =====================================================
-# EXTRAIR MODELOS DO WINDGURU
+# EXTRAIR MODELOS WINDGURU
 # =====================================================
 
 def extrair_modelos(html):
@@ -223,7 +257,7 @@ def extrair_modelos(html):
 
 
 # =====================================================
-# PEGAR VALOR DA LISTA
+# VALOR DE LISTA
 # =====================================================
 
 def valor(lista, indice):
@@ -241,7 +275,7 @@ def valor(lista, indice):
 
 
 # =====================================================
-# CONVERTER PARA NÚMERO
+# CONVERTER NUMERO
 # =====================================================
 
 def numero(valor_recebido):
@@ -262,7 +296,7 @@ def numero(valor_recebido):
 
 
 # =====================================================
-# CONVERTER NÓS PARA KM/H
+# NOS PARA KM/H
 # =====================================================
 
 def no_para_kmh(valor_recebido):
@@ -283,7 +317,7 @@ def no_para_kmh(valor_recebido):
 
 
 # =====================================================
-# DIREÇÃO EM GRAUS PARA BÚSSOLA
+# DIRECAO
 # =====================================================
 
 def direcao_compass(graus):
@@ -318,7 +352,7 @@ def direcao_compass(graus):
 
 
 # =====================================================
-# MONTAR PREVISÃO
+# MONTAR DIAS
 # =====================================================
 
 def montar_dias(modelos):
@@ -344,10 +378,6 @@ def montar_dias(modelos):
 
     dias = {}
 
-    # =================================================
-    # PERCORRER HORÁRIOS DAS ONDAS
-    # =================================================
-
     for i, hora in enumerate(
         horas_ondas
     ):
@@ -362,26 +392,20 @@ def montar_dias(modelos):
             i
         )
 
-        if hora_wg is None:
-            continue
-
-        if dia_wg is None:
+        if hora_wg is None or dia_wg is None:
             continue
 
         hora_formatada = str(
             hora_wg
         ).zfill(2)
 
-        # -------------------------------------------------
-        # SOMENTE 06 / 12 / 18
-        # -------------------------------------------------
-
+        # Somente 06, 12 e 18
         if hora_formatada not in HORARIOS:
             continue
 
-        # -------------------------------------------------
-        # ENCONTRAR MESMO HORÁRIO NO GFS
-        # -------------------------------------------------
+        # =============================================
+        # LOCALIZAR MESMO HORARIO NO GFS
+        # =============================================
 
         indice_tempo = None
 
@@ -405,15 +429,13 @@ def montar_dias(modelos):
         if chave_dia not in dias:
 
             dias[chave_dia] = {
-
                 "data": chave_dia,
-
                 "horarios": {}
             }
 
-        # =================================================
+        # =============================================
         # ONDAS
-        # =================================================
+        # =============================================
 
         onda = numero(
             valor(
@@ -436,9 +458,9 @@ def montar_dias(modelos):
             )
         )
 
-        # =================================================
+        # =============================================
         # SWELL
-        # =================================================
+        # =============================================
 
         swell = numero(
             valor(
@@ -461,9 +483,9 @@ def montar_dias(modelos):
             )
         )
 
-        # =================================================
+        # =============================================
         # VENTO
-        # =================================================
+        # =============================================
 
         vento = no_para_kmh(
             valor(
@@ -486,9 +508,9 @@ def montar_dias(modelos):
             )
         )
 
-        # =================================================
+        # =============================================
         # TEMPERATURA DO AR
-        # =================================================
+        # =============================================
 
         temperatura = numero(
             valor(
@@ -497,9 +519,9 @@ def montar_dias(modelos):
             )
         )
 
-        # =================================================
+        # =============================================
         # NUVENS
-        # =================================================
+        # =============================================
 
         nuvens = numero(
             valor(
@@ -509,12 +531,11 @@ def montar_dias(modelos):
         )
 
         if nuvens is None:
-
             nuvens = 0
 
-        # =================================================
+        # =============================================
         # CHUVA
-        # =================================================
+        # =============================================
 
         chuva = numero(
             valor(
@@ -524,12 +545,11 @@ def montar_dias(modelos):
         )
 
         if chuva is None:
-
             chuva = 0
 
-        # =================================================
-        # MONTAR DADOS DO HORÁRIO
-        # =================================================
+        # =============================================
+        # DADOS DO HORARIO
+        # =============================================
 
         dados_horario = {
 
@@ -543,36 +563,30 @@ def montar_dias(modelos):
 
             "swell": swell,
 
-            "periodo_swell":
-                periodo_swell,
+            "periodo_swell": periodo_swell,
 
-            "direcao_swell":
-                direcao_compass(
-                    direcao_swell
-                ),
+            "direcao_swell": direcao_compass(
+                direcao_swell
+            ),
 
             "vento": vento,
 
             "rajada": rajada,
 
-            "vento_dir":
-                direcao_compass(
-                    direcao_vento
-                ),
+            "vento_dir": direcao_compass(
+                direcao_vento
+            ),
 
-            "temp":
-                temperatura,
+            "temp": temperatura,
 
-            "nuvens":
-                nuvens,
+            "nuvens": nuvens,
 
-            "chuva":
-                chuva
+            "chuva": chuva
         }
 
-        # =================================================
-        # MANHÃ / TARDE / NOITE
-        # =================================================
+        # =============================================
+        # MANHA / TARDE / NOITE
+        # =============================================
 
         if hora_formatada == "06":
 
@@ -588,25 +602,20 @@ def montar_dias(modelos):
 
         dias[
             chave_dia
-        ][
-            "horarios"
-        ][
+        ]["horarios"][
             nome
         ] = dados_horario
 
-    # =====================================================
-    # CONVERTER DICIONÁRIO PARA LISTA
-    # =====================================================
+    # =================================================
+    # TRANSFORMAR EM LISTA
+    # =================================================
 
     resultado = []
 
     for dia, dados in dias.items():
 
         item = {
-
-            "data":
-                dados["data"]
-
+            "data": dados["data"]
         }
 
         horarios = dados[
@@ -615,25 +624,19 @@ def montar_dias(modelos):
 
         if "manha" in horarios:
 
-            item[
-                "manha"
-            ] = horarios[
+            item["manha"] = horarios[
                 "manha"
             ]
 
         if "tarde" in horarios:
 
-            item[
-                "tarde"
-            ] = horarios[
+            item["tarde"] = horarios[
                 "tarde"
             ]
 
         if "noite" in horarios:
 
-            item[
-                "noite"
-            ] = horarios[
+            item["noite"] = horarios[
                 "noite"
             ]
 
@@ -641,43 +644,43 @@ def montar_dias(modelos):
             item
         )
 
-    # =====================================================
-    # SOMENTE 4 DIAS
-    # =====================================================
-
-    return resultado[
-        :MAX_DIAS
-    ]
+    return resultado[:MAX_DIAS]
 
 
 # =====================================================
-# ROTA INICIAL
+# PAGINA INICIAL
 # =====================================================
 
 @app.get("/")
 def inicio():
 
     return {
-
-        "status":
-            "online",
-
-        "api":
-            "Windguru Garopaba",
-
-        "spot":
-            209196,
-
-        "versao":
-            "9.1",
-
-        "temperatura_agua_fonte":
-            "Surf-Forecast"
+        "status": "online",
+        "api": "Windguru Garopaba",
+        "spot": 209196,
+        "versao": "9.1"
     }
 
 
 # =====================================================
-# ROTA GAROPABA
+# TESTE SOMENTE TEMPERATURA DA AGUA
+# =====================================================
+
+@app.get("/agua")
+def agua():
+
+    temperatura = buscar_temperatura_agua()
+
+    return {
+        "local": "Praia de Garopaba",
+        "temperatura_agua": temperatura,
+        "unidade": "C",
+        "fonte": "Surf-Forecast"
+    }
+
+
+# =====================================================
+# API GAROPABA
 # =====================================================
 
 @app.get("/garopaba")
@@ -685,77 +688,46 @@ def garopaba():
 
     try:
 
-        # =================================================
-        # BAIXAR WINDGURU
-        # =================================================
-
+        # Windguru
         html = baixar_windguru()
-
-        # =================================================
-        # EXTRAIR MODELOS
-        # =================================================
 
         modelos = extrair_modelos(
             html
         )
 
-        # =================================================
-        # MONTAR PREVISÃO
-        # =================================================
-
         dias = montar_dias(
             modelos
         )
 
-        # =================================================
-        # TEMPERATURA DA ÁGUA
-        # =================================================
-
+        # Surf-Forecast
         temperatura_agua = (
             buscar_temperatura_agua()
         )
 
-        # =================================================
-        # RESPOSTA DA API
-        # =================================================
-
         return {
 
-            "status":
-                "ok",
+            "status": "ok",
 
-            "local":
-                "Garopaba",
+            "local": "Garopaba",
 
-            "windguru_spot":
-                209196,
+            "windguru_spot": 209196,
 
-            "unidade_onda":
-                "metros",
+            "unidade_onda": "metros",
 
-            "unidade_vento":
-                "km/h",
+            "unidade_vento": "km/h",
 
-            "temperatura_agua":
-                temperatura_agua,
+            "temperatura_agua": temperatura_agua,
 
-            "unidade_temperatura_agua":
-                "C",
+            "unidade_temperatura_agua": "C",
 
-            "fonte_temperatura_agua":
-                "Surf-Forecast",
+            "fonte_temperatura_agua": "Surf-Forecast",
 
-            "dias":
-                dias
+            "dias": dias
         }
 
     except Exception as erro:
 
         return {
-
-            "status":
-                "erro",
-
-            "erro":
-                str(erro)
+            "status": "erro",
+            "erro": str(erro)
         }
