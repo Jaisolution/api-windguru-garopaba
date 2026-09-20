@@ -10,7 +10,7 @@ import re
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="9.2"
+    version="9.3"
 )
 
 # =====================================================
@@ -520,88 +520,132 @@ def montar_dias(modelos):
         )
 
         # =============================================
-        # NUVENS
+        # NUVENS - WINDGURU (ALTA / MEDIA / BAIXA)
         # =============================================
-        # O Windguru exibe nebulosidade em 3 camadas:
-        # baixa, media e alta.
+        # Na estrutura usada pela tabela do Windguru,
+        # "CDC" representa nebulosidade alta/media/baixa.
+        # Dependendo da versao do retorno, CDC pode vir:
+        # 1) como lista de trios por horario;
+        # 2) como lista achatada com 3 valores por horario.
         #
-        # O codigo antigo usava TCDC (cobertura TOTAL),
-        # que pode marcar 100% mesmo quando a tabela do
-        # Windguru mostra valores menores nas 3 camadas.
-        #
-        # Aqui tentamos os nomes usados pelo GFS/GRIB
-        # (LCDC/MCDC/HCDC) e tambem os nomes usados em
-        # algumas estruturas do Windguru
-        # (LCLD/MCLD/HCLD).
-        #
-        # Para o ESP usamos a MAIOR das tres camadas.
-        # Ex.: alta=25, media=11, baixa=49 -> nuvens=49.
+        # Para o display usamos a MEDIA das camadas validas.
+        # Isso evita o problema do TCDC marcar 100% apenas
+        # porque existe cobertura em algum nivel da atmosfera.
 
-        def pegar_camada_nuvem(*chaves):
+        def limitar_percentual(v):
+            v = numero(v)
+            if v is None:
+                return None
+            if v < 0:
+                return 0.0
+            if v > 100:
+                return 100.0
+            return v
 
-            for chave in chaves:
+        def nuvens_cdc(indice):
+            cdc = tempo.get("CDC")
 
-                lista = tempo.get(chave)
+            if not isinstance(cdc, list) or len(cdc) == 0:
+                return None
 
-                if isinstance(lista, list):
+            # Formato A: [[alta, media, baixa], ...]
+            if indice < len(cdc):
+                item = cdc[indice]
 
-                    resultado = numero(
-                        valor(
-                            lista,
-                            indice_tempo
+                if isinstance(item, (list, tuple)):
+                    vals = [
+                        limitar_percentual(x)
+                        for x in item[:3]
+                    ]
+                    vals = [x for x in vals if x is not None]
+
+                    if vals:
+                        return round(sum(vals) / len(vals), 1)
+
+                # Alguns retornos podem trazer dicionario.
+                if isinstance(item, dict):
+                    candidatos = []
+                    for chave in (
+                        "high", "mid", "middle", "low",
+                        "alta", "media", "baixa",
+                        "HCDC", "MCDC", "LCDC"
+                    ):
+                        if chave in item:
+                            v = limitar_percentual(item.get(chave))
+                            if v is not None:
+                                candidatos.append(v)
+
+                    if candidatos:
+                        return round(
+                            sum(candidatos) / len(candidatos),
+                            1
                         )
-                    )
 
-                    if resultado is not None:
-                        return resultado
+            # Formato B: [alta, media, baixa, alta, media, baixa...]
+            base = indice * 3
+
+            if base + 2 < len(cdc):
+                vals = [
+                    limitar_percentual(cdc[base]),
+                    limitar_percentual(cdc[base + 1]),
+                    limitar_percentual(cdc[base + 2])
+                ]
+                vals = [x for x in vals if x is not None]
+
+                if vals:
+                    return round(sum(vals) / len(vals), 1)
 
             return None
 
-        nuvem_baixa = pegar_camada_nuvem(
-            "LCDC",
-            "LCLD"
-        )
-
-        nuvem_media = pegar_camada_nuvem(
-            "MCDC",
-            "MCLD"
-        )
-
-        nuvem_alta = pegar_camada_nuvem(
-            "HCDC",
-            "HCLD"
-        )
-
-        camadas_validas = [
-            n
-            for n in (
-                nuvem_baixa,
-                nuvem_media,
-                nuvem_alta
-            )
-            if n is not None
-        ]
-
-        if camadas_validas:
-
-            nuvens = round(
-                max(camadas_validas),
-                1
+        def nuvens_camadas_separadas(indice):
+            grupos = (
+                ("HCDC", "HCLD"),
+                ("MCDC", "MCLD"),
+                ("LCDC", "LCLD")
             )
 
-        else:
+            vals = []
 
-            # Fallback somente se as tres camadas
-            # nao existirem no retorno do Windguru.
-            nuvens = numero(
+            for grupo in grupos:
+                achou = None
+
+                for chave in grupo:
+                    lista = tempo.get(chave)
+
+                    if isinstance(lista, list):
+                        achou = limitar_percentual(
+                            valor(lista, indice)
+                        )
+
+                        if achou is not None:
+                            break
+
+                if achou is not None:
+                    vals.append(achou)
+
+            if vals:
+                return round(sum(vals) / len(vals), 1)
+
+            return None
+
+        # Primeiro: o campo CDC da propria tabela Windguru.
+        nuvens = nuvens_cdc(indice_tempo)
+
+        # Segundo: campos separados do GFS, se existirem.
+        if nuvens is None:
+            nuvens = nuvens_camadas_separadas(indice_tempo)
+
+        # Ultimo recurso: TCDC.
+        if nuvens is None:
+            nuvens = limitar_percentual(
                 valor(
                     tempo.get("TCDC"),
                     indice_tempo
                 )
             )
 
-            if nuvens is None:
-                nuvens = 0
+        if nuvens is None:
+            nuvens = 0
 
         # =============================================
         # CHUVA
@@ -728,7 +772,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "9.2"
+        "versao": "9.3"
     }
 
 
