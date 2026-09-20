@@ -10,7 +10,7 @@ import re
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="9.1"
+    version="9.2"
 )
 
 # =====================================================
@@ -522,16 +522,86 @@ def montar_dias(modelos):
         # =============================================
         # NUVENS
         # =============================================
+        # O Windguru exibe nebulosidade em 3 camadas:
+        # baixa, media e alta.
+        #
+        # O codigo antigo usava TCDC (cobertura TOTAL),
+        # que pode marcar 100% mesmo quando a tabela do
+        # Windguru mostra valores menores nas 3 camadas.
+        #
+        # Aqui tentamos os nomes usados pelo GFS/GRIB
+        # (LCDC/MCDC/HCDC) e tambem os nomes usados em
+        # algumas estruturas do Windguru
+        # (LCLD/MCLD/HCLD).
+        #
+        # Para o ESP usamos a MAIOR das tres camadas.
+        # Ex.: alta=25, media=11, baixa=49 -> nuvens=49.
 
-        nuvens = numero(
-            valor(
-                tempo.get("TCDC"),
-                indice_tempo
-            )
+        def pegar_camada_nuvem(*chaves):
+
+            for chave in chaves:
+
+                lista = tempo.get(chave)
+
+                if isinstance(lista, list):
+
+                    resultado = numero(
+                        valor(
+                            lista,
+                            indice_tempo
+                        )
+                    )
+
+                    if resultado is not None:
+                        return resultado
+
+            return None
+
+        nuvem_baixa = pegar_camada_nuvem(
+            "LCDC",
+            "LCLD"
         )
 
-        if nuvens is None:
-            nuvens = 0
+        nuvem_media = pegar_camada_nuvem(
+            "MCDC",
+            "MCLD"
+        )
+
+        nuvem_alta = pegar_camada_nuvem(
+            "HCDC",
+            "HCLD"
+        )
+
+        camadas_validas = [
+            n
+            for n in (
+                nuvem_baixa,
+                nuvem_media,
+                nuvem_alta
+            )
+            if n is not None
+        ]
+
+        if camadas_validas:
+
+            nuvens = round(
+                max(camadas_validas),
+                1
+            )
+
+        else:
+
+            # Fallback somente se as tres camadas
+            # nao existirem no retorno do Windguru.
+            nuvens = numero(
+                valor(
+                    tempo.get("TCDC"),
+                    indice_tempo
+                )
+            )
+
+            if nuvens is None:
+                nuvens = 0
 
         # =============================================
         # CHUVA
@@ -658,7 +728,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "9.1"
+        "versao": "9.2"
     }
 
 
