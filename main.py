@@ -10,7 +10,7 @@ import re
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="9.4"
+    version="9.5"
 )
 
 # =====================================================
@@ -650,28 +650,105 @@ def montar_dias(modelos):
         # =============================================
         # CHUVA
         # =============================================
+        # Ondas, vento, rajada, temperatura e nuvens continuam
+        # usando exatamente o horario original (06 / 12 / 18).
+        #
+        # SOMENTE a chuva olha os horarios do periodo inteiro:
+        # MANHA:  03h ate 09h
+        # TARDE:  10h ate 16h
+        # NOITE:  17h ate 23h
+        #
+        # Isso evita retornar chuva=0 apenas porque, por exemplo,
+        # as 18h esta seco, mas existe chuva as 21h.
+        #
+        # Primeiro tenta APCP1 (mm/1h). Se esse campo nao existir
+        # no modelo, usa APCP como fallback.
 
-        # O Windguru exibe na linha "*Precip. (mm/1h)"
-        # o campo APCP1. APCP corresponde a acumulado de 3 horas
-        # em modelos que trabalham nesse intervalo.
-        chuva = numero(
-            valor(
-                tempo.get("APCP1"),
-                indice_tempo
-            )
-        )
+        hora_base = int(hora_formatada)
 
-        # Fallback para modelos/retornos que nao possuem APCP1.
-        if chuva is None:
+        if hora_base == 6:
+            inicio_periodo = 3
+            fim_periodo = 9
+        elif hora_base == 12:
+            inicio_periodo = 10
+            fim_periodo = 16
+        else:
+            inicio_periodo = 17
+            fim_periodo = 23
+
+        chuvas_periodo = []
+
+        lista_chuva = tempo.get("APCP1")
+
+        if not isinstance(lista_chuva, list):
+            lista_chuva = tempo.get("APCP")
+
+        if isinstance(lista_chuva, list):
+
+            dia_alvo = str(dia_wg)
+
+            for k in range(len(horas_tempo)):
+
+                hora_k = valor(
+                    tempo.get("hr_h"),
+                    k
+                )
+
+                dia_k = valor(
+                    tempo.get("hr_d"),
+                    k
+                )
+
+                if hora_k is None or dia_k is None:
+                    continue
+
+                try:
+                    hora_k_num = int(hora_k)
+                except Exception:
+                    continue
+
+                if str(dia_k) != dia_alvo:
+                    continue
+
+                if (
+                    hora_k_num >= inicio_periodo
+                    and
+                    hora_k_num <= fim_periodo
+                ):
+                    chuva_k = numero(
+                        valor(
+                            lista_chuva,
+                            k
+                        )
+                    )
+
+                    if chuva_k is not None:
+                        chuvas_periodo.append(
+                            chuva_k
+                        )
+
+        if chuvas_periodo:
+            chuva = max(chuvas_periodo)
+        else:
+            # Fallback final: preserva o comportamento antigo
+            # caso o Windguru nao forneca dados horarios suficientes.
             chuva = numero(
                 valor(
-                    tempo.get("APCP"),
+                    tempo.get("APCP1"),
                     indice_tempo
                 )
             )
 
-        if chuva is None:
-            chuva = 0
+            if chuva is None:
+                chuva = numero(
+                    valor(
+                        tempo.get("APCP"),
+                        indice_tempo
+                    )
+                )
+
+            if chuva is None:
+                chuva = 0
 
         # =============================================
         # DADOS DO HORARIO
@@ -784,7 +861,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "9.4"
+        "versao": "9.5"
     }
 
 
