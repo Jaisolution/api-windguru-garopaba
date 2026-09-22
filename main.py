@@ -10,7 +10,7 @@ import re
 app = FastAPI(
     title="API Windguru Garopaba",
     description="API de previsão para ESP32",
-    version="9.3"
+    version="9.4"
 )
 
 # =====================================================
@@ -651,12 +651,24 @@ def montar_dias(modelos):
         # CHUVA
         # =============================================
 
+        # O Windguru exibe na linha "*Precip. (mm/1h)"
+        # o campo APCP1. APCP corresponde a acumulado de 3 horas
+        # em modelos que trabalham nesse intervalo.
         chuva = numero(
             valor(
-                tempo.get("APCP"),
+                tempo.get("APCP1"),
                 indice_tempo
             )
         )
+
+        # Fallback para modelos/retornos que nao possuem APCP1.
+        if chuva is None:
+            chuva = numero(
+                valor(
+                    tempo.get("APCP"),
+                    indice_tempo
+                )
+            )
 
         if chuva is None:
             chuva = 0
@@ -772,7 +784,7 @@ def inicio():
         "status": "online",
         "api": "Windguru Garopaba",
         "spot": 209196,
-        "versao": "9.3"
+        "versao": "9.4"
     }
 
 
